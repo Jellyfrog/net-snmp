@@ -4796,39 +4796,6 @@ new_module(const char *name, const char *file)
 }
 
 
-static void
-scan_objlist(struct node *root, struct module *mp, struct objgroup *list, const char *error)
-{
-    int             oLine = mibLine;
-
-    while (list) {
-        struct objgroup *gp = list;
-        struct node    *np;
-        list = list->next;
-        np = root;
-        while (np)
-            if (label_compare(np->label, gp->name))
-                np = np->next;
-            else
-                break;
-        if (!np) {
-	    int i;
-	    struct module_import *mip;
-	    /* if not local, check if it was IMPORTed */
-	    for (i = 0, mip = mp->imports; i < mp->no_imports; i++, mip++)
-		if (strcmp(mip->label, gp->name) == 0)
-		    break;
-	    if (i == mp->no_imports) {
-		mibLine = gp->line;
-		print_error(error, gp->name, QUOTESTRING);
-	    }
-        }
-        free(gp->name);
-        free(gp);
-    }
-    mibLine = oLine;
-}
-
 static void free_objgroup(struct objgroup *o)
 {
     while (o) {
@@ -4989,6 +4956,37 @@ label_table_clear(struct label_table *lt)
 }
 
 /*
+ * Reports the members of @list that are neither defined in the current module
+ * nor imported. @labels holds the nodes of the current module.
+ */
+static void
+scan_objlist(const struct label_table *labels, struct module *mp,
+             struct objgroup *list, const char *error)
+{
+    int             oLine = mibLine;
+
+    while (list) {
+        struct objgroup *gp = list;
+        list = list->next;
+        if (!label_table_find(labels, gp->name, label_hash(gp->name))) {
+	    int i;
+	    struct module_import *mip;
+	    /* if not local, check if it was IMPORTed */
+	    for (i = 0, mip = mp->imports; i < mp->no_imports; i++, mip++)
+		if (strcmp(mip->label, gp->name) == 0)
+		    break;
+	    if (i == mp->no_imports) {
+		mibLine = gp->line;
+		print_error(error, gp->name, QUOTESTRING);
+	    }
+        }
+        free(gp->name);
+        free(gp);
+    }
+    mibLine = oLine;
+}
+
+/*
  * Parses a mib file and returns a linked list of nodes found in the file.
  * Returns NULL on error.
  */
@@ -5043,9 +5041,9 @@ parse(FILE * fp)
                 for (mp = module_head; mp; mp = mp->next)
                     if (mp->modid == current_module)
                         break;
-                scan_objlist(root, mp, objgroups, "Undefined OBJECT-GROUP");
-                scan_objlist(root, mp, objects, "Undefined OBJECT");
-                scan_objlist(root, mp, notifs, "Undefined NOTIFICATION");
+                scan_objlist(&labels, mp, objgroups, "Undefined OBJECT-GROUP");
+                scan_objlist(&labels, mp, objects, "Undefined OBJECT");
+                scan_objlist(&labels, mp, notifs, "Undefined NOTIFICATION");
                 objgroups = NULL;
                 objects = NULL;
                 notifs = NULL;
