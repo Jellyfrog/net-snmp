@@ -3267,6 +3267,11 @@ parse_objectgroup(FILE * fp, char *name, int what, struct objgroup **ol)
             }
             o->line = mibLine;
             o->name = strdup(token);
+            if (!o->name) {
+                free(o);
+                print_error("Resource failure", token, type);
+                goto skip;
+            }
             o->next = *ol;
             *ol = o;
             type = get_token(fp, token, MAXTOKEN);
@@ -4828,6 +4833,7 @@ struct label_table {
     struct label_entry **buckets;
     size_t          size;
     size_t          count;
+    int             incomplete; /* set if label_table_add() failed */
 };
 
 static unsigned int
@@ -4904,8 +4910,10 @@ label_table_find_dup(const struct label_table *lt, const struct node *np)
 }
 
 /*
- * Adds @np to @lt. If memory allocation fails, @np is not added. The only
- * consequence of this is that a duplicate object warning may be missed.
+ * Adds @np to @lt. If memory allocation fails, @np is not added and
+ * @lt->incomplete is set. A duplicate object warning may then be missed and
+ * users that need to know whether a label is defined (scan_objlist()) must
+ * fall back to scanning the list of parsed nodes.
  */
 static void
 label_table_add(struct label_table *lt, struct node *np)
@@ -4922,11 +4930,15 @@ label_table_add(struct label_table *lt, struct node *np)
             le->other = np;
         return;
     }
-    if (lt->count >= lt->size && label_table_grow(lt) < 0)
+    if (lt->count >= lt->size && label_table_grow(lt) < 0) {
+        lt->incomplete = 1;
         return;
+    }
     le = malloc(sizeof(*le));
-    if (!le)
+    if (!le) {
+        lt->incomplete = 1;
         return;
+    }
     le->hash = hash;
     le->first = np;
     le->other = NULL;
@@ -4953,32 +4965,122 @@ label_table_clear(struct label_table *lt)
     lt->buckets = NULL;
     lt->size = 0;
     lt->count = 0;
+    lt->incomplete = 0;
+}
+
+/*
+ * Returns nonzero if a node with label @name has been parsed in the current
+ * module. @labels holds the nodes of the current module and @root is the list
+ * of those nodes. The hash table is case-sensitive, so it can only be used if
+ * label_compare() is strcmp() and if no nodes were dropped from the table.
+ */
+static int
+label_is_local(const struct label_table *labels, const struct node *root,
+               const char *name)
+{
+    const struct node *np;
+
+#ifndef STRICT_MIB_PARSEING
+    if (!labels->incomplete)
+        return label_table_find(labels, name, label_hash(name)) != NULL;
+#endif
+    for (np = root; np; np = np->next)
+        if (np->label && !label_compare(np->label, name))
+            return 1;
+    return 0;
+}
+
+/*
+ * Open addressing hash set with the labels imported by a module. If
+ * allocating the set fails, names is NULL and import_set_contains() falls
+ * back to a linear scan of the import list.
+ */
+struct import_set {
+    const char    **names;
+    size_t          mask;
+    const struct module *mp;
+};
+
+static void
+import_set_init(struct import_set *is, const struct module *mp)
+{
+    size_t          size = 16;
+    int             i;
+
+    is->names = NULL;
+    is->mask = 0;
+    is->mp = mp;
+    if (!mp || mp->no_imports <= 0)
+        return;
+    while (size < 2 * (size_t)mp->no_imports)
+        size *= 2;
+    is->names = calloc(size, sizeof(*is->names));
+    if (!is->names)
+        return;
+    is->mask = size - 1;
+    for (i = 0; i < mp->no_imports; i++) {
+        const char     *label = mp->imports[i].label;
+        size_t          j;
+
+        if (!label)
+            continue;
+        for (j = label_hash(label) & is->mask; is->names[j];
+             j = (j + 1) & is->mask)
+            if (strcmp(is->names[j], label) == 0)
+                break;
+        is->names[j] = label;
+    }
+}
+
+static int
+import_set_contains(const struct import_set *is, const char *name)
+{
+    const struct module *mp = is->mp;
+    size_t          j;
+    int             i;
+
+    if (is->names) {
+        for (j = label_hash(name) & is->mask; is->names[j];
+             j = (j + 1) & is->mask)
+            if (strcmp(is->names[j], name) == 0)
+                return 1;
+        return 0;
+    }
+    if (!mp)
+        return 0;
+    for (i = 0; i < mp->no_imports; i++)
+        if (mp->imports[i].label && strcmp(mp->imports[i].label, name) == 0)
+            return 1;
+    return 0;
+}
+
+static void
+import_set_clear(struct import_set *is)
+{
+    free(is->names);
+    is->names = NULL;
 }
 
 /*
  * Reports the members of @list that are neither defined in the current module
- * nor imported. @labels holds the nodes of the current module.
+ * nor imported. @labels and @root hold the nodes of the current module and
+ * @imports the labels imported by it. Frees @list.
  */
 static void
-scan_objlist(const struct label_table *labels, struct module *mp,
-             struct objgroup *list, const char *error)
+scan_objlist(const struct label_table *labels, const struct node *root,
+             const struct import_set *imports, struct objgroup *list,
+             const char *error)
 {
     int             oLine = mibLine;
 
     while (list) {
         struct objgroup *gp = list;
+
         list = list->next;
-        if (!label_table_find(labels, gp->name, label_hash(gp->name))) {
-	    int i;
-	    struct module_import *mip;
-	    /* if not local, check if it was IMPORTed */
-	    for (i = 0, mip = mp->imports; i < mp->no_imports; i++, mip++)
-		if (strcmp(mip->label, gp->name) == 0)
-		    break;
-	    if (i == mp->no_imports) {
-		mibLine = gp->line;
-		print_error(error, gp->name, QUOTESTRING);
-	    }
+        if (gp->name && !label_is_local(labels, root, gp->name) &&
+            !import_set_contains(imports, gp->name)) {
+            mibLine = gp->line;
+            print_error(error, gp->name, QUOTESTRING);
         }
         free(gp->name);
         free(gp);
@@ -5005,7 +5107,7 @@ parse(FILE * fp)
 #define IN_MIB                2
     int             state = BETWEEN_MIBS;
     struct node    *np = NULL, *root = NULL;
-    struct label_table labels = { NULL, 0, 0 };
+    struct label_table labels = { NULL, 0, 0, 0 };
     struct objgroup *oldgroups = objgroups, *oldobjects = objects,
                     *oldnotifs = notifs;
 
@@ -5034,6 +5136,7 @@ parse(FILE * fp)
                 goto free_mib;
             } else {
                 struct module  *mp;
+                struct import_set imports;
 #ifdef TEST
                 printf("\nNodes for Module %s:\n", name);
                 print_nodes(stdout, root);
@@ -5041,9 +5144,14 @@ parse(FILE * fp)
                 for (mp = module_head; mp; mp = mp->next)
                     if (mp->modid == current_module)
                         break;
-                scan_objlist(&labels, mp, objgroups, "Undefined OBJECT-GROUP");
-                scan_objlist(&labels, mp, objects, "Undefined OBJECT");
-                scan_objlist(&labels, mp, notifs, "Undefined NOTIFICATION");
+                import_set_init(&imports, mp);
+                scan_objlist(&labels, root, &imports, objgroups,
+                             "Undefined OBJECT-GROUP");
+                scan_objlist(&labels, root, &imports, objects,
+                             "Undefined OBJECT");
+                scan_objlist(&labels, root, &imports, notifs,
+                             "Undefined NOTIFICATION");
+                import_set_clear(&imports);
                 objgroups = NULL;
                 objects = NULL;
                 notifs = NULL;
