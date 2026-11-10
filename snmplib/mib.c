@@ -4240,7 +4240,6 @@ void
 _oid_finish_printing(const oid * objid, size_t objidlen,
                      u_char ** buf, size_t * buf_len, size_t * out_len,
                      int allow_realloc, int *buf_overflow) {
-    char            intbuf[64];
     if (*buf != NULL && *(*buf + *out_len - 1) != '.') {
         if (!*buf_overflow && !snmp_cstrcat(buf, buf_len, out_len,
                                             allow_realloc, ".")) {
@@ -4248,12 +4247,11 @@ _oid_finish_printing(const oid * objid, size_t objidlen,
         }
     }
 
-    while (objidlen-- > 0) {    /* output rest of name, uninterpreted */
-        snprintf(intbuf, sizeof(intbuf), "%" NETSNMP_PRIo "u.", *objid++);
-        if (!*buf_overflow && !snmp_cstrcat(buf, buf_len, out_len,
-                                            allow_realloc, intbuf)) {
+    /* output rest of name, uninterpreted */
+    while (objidlen-- > 0 && !*buf_overflow) {
+        if (!_sprint_realloc_decimal(buf, buf_len, out_len, allow_realloc,
+                                     *objid++, 0, '.'))
             *buf_overflow = 1;
-        }
     }
 
     if (*buf != NULL) {
