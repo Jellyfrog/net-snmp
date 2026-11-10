@@ -310,17 +310,17 @@ _sprint_hexstring_line(u_char ** buf, size_t * buf_len, size_t * out_len,
     /*
      * .... and display the hex values themselves....
      */
-    for (; lenleft >= 8; lenleft-=8) {
-        snprintf((char *) (*buf + *out_len), *buf_len - *out_len,
-                "%02X %02X %02X %02X %02X %02X %02X %02X ", cp[0], cp[1],
-                cp[2], cp[3], cp[4], cp[5], cp[6], cp[7]);
-        *out_len += strlen((char *) (*buf + *out_len));
-        cp       += 8;
-    }
     for (; lenleft > 0; lenleft--) {
-        snprintf((char *) (*buf + *out_len), *buf_len - *out_len, "%02X ", *cp++);
-        *out_len += strlen((char *) (*buf + *out_len));
+        static const char hexdigits[] = "0123456789ABCDEF";
+        u_char         *op = *buf + *out_len;
+
+        op[0] = hexdigits[*cp >> 4];
+        op[1] = hexdigits[*cp & 0xf];
+        op[2] = ' ';
+        *out_len += 3;
+        cp++;
     }
+    (*buf)[*out_len] = '\0';
 
     /*
      * .... plus (optionally) do the same for the ASCII equivalent.
