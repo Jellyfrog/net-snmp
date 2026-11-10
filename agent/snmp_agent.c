@@ -1042,6 +1042,18 @@ netsnmp_agent_check_packet(netsnmp_session * session,
                            void *transport_data, int transport_data_length)
 {
     char           *addr_string = NULL;
+    /*
+     * The address cache only serves to log the sender address (snmpd -a or
+     * -V). Skip formatting the address if nothing will use it.
+     */
+    const int       log_addr = log_addresses ||
+        netsnmp_ds_get_boolean(NETSNMP_DS_APPLICATION_ID,
+                               NETSNMP_DS_AGENT_VERBOSE);
+#ifdef  NETSNMP_USE_LIBWRAP
+    const int       need_addr = 1;
+#else
+    const int       need_addr = log_addr;
+#endif
 #ifdef  NETSNMP_USE_LIBWRAP
     char *tcpudpaddr = NULL, *name;
     short not_log_connection;
@@ -1065,7 +1077,7 @@ netsnmp_agent_check_packet(netsnmp_session * session,
      * Optionally cache the network address of the sender.
      */
 
-    if (transport != NULL && transport->f_fmtaddr != NULL) {
+    if (need_addr && transport != NULL && transport->f_fmtaddr != NULL) {
         /*
          * Okay I do know how to format this address for logging.  
          */
@@ -1122,7 +1134,8 @@ netsnmp_agent_check_packet(netsnmp_session * session,
     snmp_increment_statistic(STAT_SNMPINPKTS);
 
     if (addr_string != NULL) {
-        netsnmp_addrcache_add(addr_string);
+        if (log_addr)
+            netsnmp_addrcache_add(addr_string);
         SNMP_FREE(addr_string);
     }
     return 1;
