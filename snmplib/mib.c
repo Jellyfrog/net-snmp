@@ -1474,11 +1474,9 @@ sprint_realloc_integer(u_char ** buf, size_t * buf_len, size_t * out_len,
                 return 0;
             }
         } else {
-            char            str[32];
-            snprintf(str, sizeof(str), "%ld", *var->val.integer);
-            if (!snmp_cstrcat(buf, buf_len, out_len, allow_realloc, str)) {
+            if (!_sprint_realloc_long(buf, buf_len, out_len, allow_realloc,
+                                      *var->val.integer))
                 return 0;
-            }
         }
     } else if (netsnmp_ds_get_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_QUICK_PRINT)) {
         if (!snmp_cstrcat(buf, buf_len, out_len, allow_realloc, enum_string)) {
