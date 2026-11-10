@@ -1163,6 +1163,75 @@ sprint_realloc_object_identifier(u_char ** buf, size_t * buf_len,
 
 
 /**
+ * Appends v in decimal to a buffer, preceded by '-' if negative is set and
+ * followed by suffix unless suffix is '\0'.
+ *
+ * If allow_realloc is true the buffer will be (re)allocated to fit in the
+ * needed size, as with snmp_strcat(). (Note: *buf may change due to this.)
+ *
+ * @return 1 on success, or 0 on failure (out of memory, or buffer too
+ *         small when not allowed to realloc.)
+ */
+static int
+_sprint_realloc_decimal(u_char ** buf, size_t * buf_len, size_t * out_len,
+                        int allow_realloc, unsigned long v, int negative,
+                        char suffix)
+{
+    char            tmp[3 * sizeof(v) + 3], *cp = tmp + sizeof(tmp);
+    size_t          len;
+
+    if (buf == NULL || buf_len == NULL || out_len == NULL)
+        return 0;
+
+    if (suffix)
+        *--cp = suffix;
+    do {
+        *--cp = '0' + v % 10;
+        v /= 10;
+    } while (v);
+    if (negative)
+        *--cp = '-';
+    len = tmp + sizeof(tmp) - cp;
+
+    while (*out_len + len + 1 >= *buf_len) {
+        if (!(allow_realloc && snmp_realloc(buf, buf_len)))
+            return 0;
+    }
+    if (!*buf)
+        return 0;
+    memcpy(*buf + *out_len, cp, len);
+    *out_len += len;
+    (*buf)[*out_len] = '\0';
+    return 1;
+}
+
+/**
+ * Appends an unsigned value in decimal to a buffer.
+ * See _sprint_realloc_decimal().
+ */
+static int
+_sprint_realloc_ulong(u_char ** buf, size_t * buf_len, size_t * out_len,
+                      int allow_realloc, unsigned long v)
+{
+    return _sprint_realloc_decimal(buf, buf_len, out_len, allow_realloc, v,
+                                   0, '\0');
+}
+
+/**
+ * Appends a signed value in decimal to a buffer.
+ * See _sprint_realloc_decimal().
+ */
+static int
+_sprint_realloc_long(u_char ** buf, size_t * buf_len, size_t * out_len,
+                     int allow_realloc, long v)
+{
+    /* negate in unsigned arithmetic so that LONG_MIN is handled */
+    return _sprint_realloc_decimal(buf, buf_len, out_len, allow_realloc,
+                                   v < 0 ? 0UL - (unsigned long) v :
+                                   (unsigned long) v, v < 0, '\0');
+}
+
+/**
  * Prints a timetick variable into a buffer.
  *
  * If allow_realloc is true the buffer will be (re)allocated to fit in the 
