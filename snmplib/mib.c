@@ -4323,11 +4323,10 @@ _get_realloc_symbol(const oid * objid, size_t objidlen,
 
             if (!strncmp(subtree->label, ANON, ANON_LEN) ||
                 (NETSNMP_OID_OUTPUT_NUMERIC == output_format)) {
-                snprintf(intbuf, sizeof(intbuf), "%lu", subtree->subid);
-                if (!*buf_overflow && !snmp_cstrcat(buf, buf_len, out_len,
-                                                    allow_realloc, intbuf)) {
+                if (!*buf_overflow &&
+                    !_sprint_realloc_ulong(buf, buf_len, out_len,
+                                           allow_realloc, subtree->subid))
                     *buf_overflow = 1;
-                }
             } else {
                 if (!*buf_overflow &&
                     !snmp_cstrcat(buf, buf_len, out_len, allow_realloc,
