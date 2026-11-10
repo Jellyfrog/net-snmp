@@ -1272,14 +1272,9 @@ sprint_realloc_timeticks(u_char ** buf, size_t * buf_len, size_t * out_len,
                                           NULL);
     }
 
-    if (netsnmp_ds_get_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_NUMERIC_TIMETICKS)) {
-        char            str[32];
-        snprintf(str, sizeof(str), "%lu", *(u_long *) var->val.integer);
-        if (!snmp_cstrcat(buf, buf_len, out_len, allow_realloc, str)) {
-            return 0;
-        }
-        return 1;
-    }
+    if (netsnmp_ds_get_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_NUMERIC_TIMETICKS))
+        return _sprint_realloc_ulong(buf, buf_len, out_len, allow_realloc,
+                                     *(u_long *) var->val.integer);
     if (!netsnmp_ds_get_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_QUICK_PRINT)) {
         char            str[32];
         snprintf(str, sizeof(str), "Timeticks: (%lu) ",
