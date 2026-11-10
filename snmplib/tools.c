@@ -193,6 +193,8 @@ int
 snmp_strcat(u_char ** buf, size_t * buf_len, size_t * out_len,
             int allow_realloc, const u_char * s)
 {
+    size_t          len;
+
     if (buf == NULL || buf_len == NULL || out_len == NULL) {
         return 0;
     }
@@ -204,7 +206,8 @@ snmp_strcat(u_char ** buf, size_t * buf_len, size_t * out_len,
         return 1;
     }
 
-    while ((*out_len + strlen((const char *) s) + 1) >= *buf_len) {
+    len = strlen((const char *) s);
+    while ((*out_len + len + 1) >= *buf_len) {
         if (!(allow_realloc && snmp_realloc(buf, buf_len))) {
             return 0;
         }
@@ -213,8 +216,8 @@ snmp_strcat(u_char ** buf, size_t * buf_len, size_t * out_len,
     if (!*buf)
         return 0;
 
-    strcpy((char *) (*buf + *out_len), (const char *) s);
-    *out_len += strlen((char *) (*buf + *out_len));
+    memcpy(*buf + *out_len, s, len + 1);
+    *out_len += len;
     return 1;
 }
 
