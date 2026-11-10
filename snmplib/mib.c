@@ -1678,8 +1678,6 @@ sprint_realloc_counter(u_char ** buf, size_t * buf_len, size_t * out_len,
                        const struct enum_list *enums,
                        const char *hint, const char *units)
 {
-    char            tmp[32];
-
     if (var->type != ASN_COUNTER) {
         if (!netsnmp_ds_get_boolean(
                 NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_QUICKE_PRINT)) {
@@ -1698,10 +1696,9 @@ sprint_realloc_counter(u_char ** buf, size_t * buf_len, size_t * out_len,
             return 0;
         }
     }
-    snprintf(tmp, sizeof(tmp), "%u", (unsigned int)(*var->val.integer & 0xffffffff));
-    if (!snmp_cstrcat(buf, buf_len, out_len, allow_realloc, tmp)) {
+    if (!_sprint_realloc_ulong(buf, buf_len, out_len, allow_realloc,
+                               *var->val.integer & 0xffffffff))
         return 0;
-    }
     if (units) {
         return (snmp_cstrcat(buf, buf_len, out_len, allow_realloc, " ") &&
                 snmp_cstrcat(buf, buf_len, out_len, allow_realloc, units));
