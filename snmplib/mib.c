@@ -3110,10 +3110,11 @@ netsnmp_sprint_realloc_objid(u_char ** buf, size_t * buf_len,
     int             tbuf_overflow = 0;
     int             output_format;
 
-    if ((tbuf = calloc(tbuf_len, 1)) == NULL) {
+    if ((tbuf = malloc(tbuf_len)) == NULL) {
         tbuf_overflow = 1;
     } else {
-        *tbuf = '.';
+        tbuf[0] = '.';
+        tbuf[1] = '\0';
         tout_len = 1;
     }
 
@@ -3182,10 +3183,11 @@ netsnmp_sprint_realloc_objid_tree(u_char ** buf, size_t * buf_len,
     int             tbuf_overflow = 0;
     int             output_format;
 
-    if ((tbuf = calloc(tbuf_len, 1)) == NULL) {
+    if ((tbuf = malloc(tbuf_len)) == NULL) {
         tbuf_overflow = 1;
     } else {
-        *tbuf = '.';
+        tbuf[0] = '.';
+        tbuf[1] = '\0';
         tout_len = 1;
     }
 
@@ -3348,10 +3350,11 @@ fprint_objid(FILE * f, const oid * objid, size_t objidlen)
     size_t          buf_len = 256, out_len = 0;
     int             buf_overflow = 0;
 
-    if ((buf = calloc(buf_len, 1)) == NULL) {
+    if ((buf = malloc(buf_len)) == NULL) {
         fprintf(f, "[TRUNCATED]\n");
         return;
     } else {
+        buf[0] = '\0';
         netsnmp_sprint_realloc_objid_tree(&buf, &buf_len, &out_len, 1,
                                           &buf_overflow, objid, objidlen);
         if (buf_overflow) {
@@ -3497,10 +3500,11 @@ fprint_variable(FILE * f,
     u_char         *buf = NULL;
     size_t          buf_len = 256, out_len = 0;
 
-    if ((buf = calloc(buf_len, 1)) == NULL) {
+    if ((buf = malloc(buf_len)) == NULL) {
         fprintf(f, "[TRUNCATED]\n");
         return;
     } else {
+        buf[0] = '\0';
         if (sprint_realloc_variable(&buf, &buf_len, &out_len, 1,
                                     objid, objidlen, variable)) {
             fprintf(f, "%s\n", buf);
