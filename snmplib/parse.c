@@ -3655,7 +3655,7 @@ parse_compliance(FILE * fp, char *name)
              * A MODULE clause that names the current module is equivalent
              * to one without a module name.
              */
-            if (strcmp(token, module_name(current_module, modname))) {
+            if (label_compare(token, module_name(current_module, modname))) {
                 modid = read_module_internal(token);
                 if (modid != MODULE_LOADED_OK
                     && modid != MODULE_ALREADY_LOADED) {
@@ -3726,9 +3726,9 @@ parse_compliance(FILE * fp, char *name)
                 print_error("Expected DESCRIPTION", token, type);
                 goto skip;
             }
-            type = get_token(fp, token, MAXTOKEN);
+            type = get_token(fp, quoted_string_buffer, MAXQUOTESTR);
             if (type != QUOTESTRING) {
-                print_error("Bad DESCRIPTION", token, type);
+                print_error("Bad DESCRIPTION", quoted_string_buffer, type);
                 goto skip;
             }
             type = get_token(fp, token, MAXTOKEN);
@@ -3800,7 +3800,7 @@ parse_capabilities(FILE * fp, char *name)
             goto skip;
         }
         np->reference = strdup(quoted_string_buffer);
-        type = get_token(fp, token, type);
+        type = get_token(fp, token, MAXTOKEN);
     }
     while (type == SUPPORTS) {
         int             modid;
@@ -4135,6 +4135,13 @@ parse_imports(FILE * fp)
     int             i = 0, old_i;       /* index of first import from each module */
 
     import_list = malloc(MAX_IMPORTS * sizeof(*import_list));
+    if (!import_list) {
+        print_error("Resource failure", "IMPORTS", IMPORTS);
+        type = get_token(fp, token, MAXTOKEN);
+        while (type != SEMI && type != ENDOFFILE)
+            type = get_token(fp, token, MAXTOKEN);
+        return;
+    }
 
     type = get_token(fp, token, MAXTOKEN);
 
@@ -4150,7 +4157,11 @@ parse_imports(FILE * fp)
                 } while (type != SEMI && type != ENDOFFILE);
                 goto out;
             }
-            import_list[import_count++].label = strdup(token);
+            import_list[import_count].label = strdup(token);
+            if (import_list[import_count].label)
+                import_count++;
+            else
+                print_error("Resource failure", token, type);
         } else if (type == FROM) {
             type = get_token(fp, token, MAXTOKEN);
             if (import_count == i) {    /* All imports are handled internally */
@@ -4817,9 +4828,10 @@ static void free_objgroup(struct objgroup *o)
 }
 
 /*
- * Hash table that maps node labels onto the nodes that have been parsed so
- * far by parse(). Used to detect duplicate objects in O(1) instead of
- * scanning the entire list of parsed nodes for every new node.
+ * Hash table that maps the labels of the nodes of the module being parsed
+ * onto those nodes. Used to detect duplicate objects and to look up the
+ * members of OBJECT-GROUP, NOTIFICATION-GROUP and MODULE-COMPLIANCE clauses
+ * in O(1) instead of scanning the entire list of parsed nodes.
  *
  * For each label, two nodes are stored: the first node with that label and
  * the first node with that label whose subid differs from the subid of the
@@ -4837,6 +4849,7 @@ struct label_table {
     struct label_entry **buckets;
     size_t          size;
     size_t          count;
+    int             incomplete; /* a node could not be added */
 };
 
 static unsigned int
@@ -4913,34 +4926,36 @@ label_table_find_dup(const struct label_table *lt, const struct node *np)
 }
 
 /*
- * Adds @np to @lt. Returns 0 upon success or -1 if memory allocation failed.
- * scan_objlist() relies on @lt holding every node of the current module, so
- * a failure must abort parsing of the module.
+ * Adds @np to @lt. If memory allocation fails, @np is not added and @lt is
+ * marked as incomplete. A duplicate object warning may then be missed and
+ * label_is_local() falls back to scanning the list of parsed nodes.
  */
-static int
+static void
 label_table_add(struct label_table *lt, struct node *np)
 {
     struct label_entry *le, **head;
     unsigned int    hash;
 
     if (!np->label)
-        return 0;
+        return;
     hash = label_hash(np->label);
     le = label_table_find(lt, np->label, hash);
     if (le) {
         if (!le->other && le->first->subid != np->subid)
             le->other = np;
-        return 0;
+        return;
     }
     /*
      * The buckets are chained, so if growing the table fails, the entry can
      * still be added to the existing buckets.
      */
-    if (lt->count >= lt->size && label_table_grow(lt) < 0 && !lt->size)
-        return -1;
-    le = malloc(sizeof(*le));
-    if (!le)
-        return -1;
+    if (lt->count >= lt->size)
+        label_table_grow(lt);
+    le = lt->size ? malloc(sizeof(*le)) : NULL;
+    if (!le) {
+        lt->incomplete = 1;
+        return;
+    }
     le->hash = hash;
     le->first = np;
     le->other = NULL;
@@ -4948,7 +4963,6 @@ label_table_add(struct label_table *lt, struct node *np)
     le->next = *head;
     *head = le;
     lt->count++;
-    return 0;
 }
 
 static void
@@ -4968,28 +4982,29 @@ label_table_clear(struct label_table *lt)
     lt->buckets = NULL;
     lt->size = 0;
     lt->count = 0;
+    lt->incomplete = 0;
 }
 
 /*
  * Returns nonzero if a node with label @name has been parsed in the current
  * module. @labels holds the nodes of the current module and @root is the list
- * of those nodes. The hash table is case-sensitive, so it can only be used if
- * label_compare() is strcmp().
+ * of those nodes. The list is only scanned if the hash table is incomplete or
+ * if label_compare() is not strcmp(), since the hash table is case-sensitive.
  */
 static int
 label_is_local(const struct label_table *labels, const struct node *root,
                const char *name)
 {
-#ifdef STRICT_MIB_PARSEING
     const struct node *np;
 
+#ifndef STRICT_MIB_PARSEING
+    if (!labels->incomplete)
+        return label_table_find(labels, name, label_hash(name)) != NULL;
+#endif
     for (np = root; np; np = np->next)
         if (np->label && !label_compare(np->label, name))
             return 1;
     return 0;
-#else
-    return label_table_find(labels, name, label_hash(name)) != NULL;
-#endif
 }
 
 /*
@@ -5002,29 +5017,28 @@ scan_objlist(const struct label_table *labels, const struct node *root,
              const struct module *mp, struct objgroup *list,
              const char *error)
 {
-    int             oLine = mibLine;
+    int             old_line = mibLine;
+    const struct objgroup *gp;
 
-    while (list) {
-        struct objgroup *gp = list;
-
-        list = list->next;
+    for (gp = list; gp; gp = gp->next) {
         netsnmp_assert(gp->name);
         if (!label_is_local(labels, root, gp->name)) {
             int             i;
 
-            /* if not local, check if it was IMPORTed */
+            /*
+             * If not local, check if it was IMPORTed.
+             */
             for (i = 0; i < mp->no_imports; i++)
-                if (strcmp(mp->imports[i].label, gp->name) == 0)
+                if (!label_compare(mp->imports[i].label, gp->name))
                     break;
             if (i == mp->no_imports) {
                 mibLine = gp->line;
                 print_error(error, gp->name, QUOTESTRING);
             }
         }
-        free(gp->name);
-        free(gp);
     }
-    mibLine = oLine;
+    free_objgroup(list);
+    mibLine = old_line;
 }
 
 /*
@@ -5046,7 +5060,7 @@ parse(FILE * fp)
 #define IN_MIB                2
     int             state = BETWEEN_MIBS;
     struct node    *np = NULL, *root = NULL;
-    struct label_table labels = { NULL, 0, 0 };
+    struct label_table labels = { NULL, 0, 0, 0 };
     struct objgroup *oldgroups = objgroups, *oldobjects = objects,
                     *oldnotifs = notifs;
 
@@ -5333,14 +5347,13 @@ parse(FILE * fp)
                 if (np)
                     np->next = nnp;
                 else
-                    np = root = nnp;
+                    root = nnp;
                 /*
-                 * The previous tail of the list has already been added to
-                 * the label table.
+                 * Add the new nodes to the label table and leave np at the
+                 * new tail of the list.
                  */
                 for (np = nnp; ; np = np->next) {
-                    if (label_table_add(&labels, np) < 0)
-                        goto out_of_memory;
+                    label_table_add(&labels, np);
                     if (!np->next)
                         break;
                 }
@@ -5359,9 +5372,6 @@ parse(FILE * fp)
     notifs = oldnotifs;
     return root;
 
-out_of_memory:
-    print_error("Resource failure", np->label, QUOTESTRING);
-    gMibError = MODULE_SYNTAX_ERROR;
 free_mib:
     label_table_clear(&labels);
     for (; root; root = np) {
