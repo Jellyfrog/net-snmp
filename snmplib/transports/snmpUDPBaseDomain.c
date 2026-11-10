@@ -194,8 +194,11 @@ netsnmp_udpbase_recvfrom(NETSNMP_SOCKET sock, void *buf, int len,
     DEBUGMSGTL(("udpbase:recv", "got source addr: %s\n",
                 inet_ntoa(((struct sockaddr_in *)from)->sin_addr)));
 
-    {
-        /* Get the local port number for use in diagnostic messages */
+    if (dstip->sa_family == AF_UNSPEC) {
+        /*
+         * Get the local port number for use in diagnostic messages unless
+         * the caller already supplied the local address of the socket.
+         */
         int r2 = getsockname(sock, dstip, dstlen);
         netsnmp_assert(r2 == 0);
     }
@@ -253,22 +256,8 @@ int netsnmp_udpbase_sendto_unix(NETSNMP_SOCKET sock,
     iov.iov_base = NETSNMP_REMOVE_CONST(void *, data);
     iov.iov_len  = len;
 
-    {
-        struct sockaddr_storage peer;
-        socklen_t peer_len = sizeof(peer);
-
-        if (getpeername(sock, (struct sockaddr *)&peer, &peer_len) == 0) {
-            m.msg_name = NULL;
-            m.msg_namelen = 0;
-        } else {
-            m.msg_name = NETSNMP_REMOVE_CONST(void *, remote);
-            m.msg_namelen = sizeof(struct sockaddr_in);
-            if (errno != ENOTCONN) {
-                snmp_log(LOG_ERR, "udpbase:sendto: fd %d getpeername failed: %d (%s)\n",
-                         sock, errno, strerror(errno));
-            }
-        }
-    }
+    m.msg_name = NETSNMP_REMOVE_CONST(void *, remote);
+    m.msg_namelen = sizeof(struct sockaddr_in);
     m.msg_iov		= &iov;
     m.msg_iovlen	= 1;
     m.msg_flags		= 0;
@@ -277,6 +266,16 @@ int netsnmp_udpbase_sendto_unix(NETSNMP_SOCKET sock,
         struct cmsghdr *cm;
         struct in_pktinfo ipi;
         int use_sendto = FALSE;
+        struct sockaddr_storage peer;
+        socklen_t peer_len = sizeof(peer);
+
+        if (getpeername(sock, (struct sockaddr *)&peer, &peer_len) == 0) {
+            m.msg_name = NULL;
+            m.msg_namelen = 0;
+        } else if (errno != ENOTCONN) {
+            snmp_log(LOG_ERR, "udpbase:sendto: fd %d getpeername failed: %d (%s)\n",
+                     sock, errno, strerror(errno));
+        }
 
         memset(cmsg, 0, sizeof(cmsg));
 
@@ -369,6 +368,17 @@ int netsnmp_udpbase_sendto_unix(NETSNMP_SOCKET sock,
     }
 
     rc = sendmsg(sock, &m, MSG_DONTWAIT);
+    if (rc < 0 && errno == EISCONN && m.msg_name) {
+        /*
+         * Connected sockets do not accept a destination address on some
+         * systems. Avoid a getpeername() call per message by only retrying
+         * without an address if sendmsg() reports that the socket is
+         * connected.
+         */
+        m.msg_name = NULL;
+        m.msg_namelen = 0;
+        rc = sendmsg(sock, &m, MSG_DONTWAIT);
+    }
     if (rc < 0) {
         snmp_log(LOG_ERR, "udpbase:sendto: sendmsg fd %d err %d (\"%s\") msg_name=%p\n",
                  sock, errno, strerror(errno), m.msg_name);
@@ -469,6 +479,17 @@ netsnmp_udpbase_recv(netsnmp_transport *t, void *buf, int size,
 	while (rc < 0) {
 #ifdef netsnmp_udpbase_recvfrom_sendto_defined
             socklen_t local_addr_len = sizeof(addr_pair->local_addr);
+            const netsnmp_indexed_addr_pair *t_addr_pair = t->data;
+
+            /*
+             * For client transports the local address has been stored in
+             * t->data when the socket was opened. Copy it to avoid a
+             * getsockname() call per received message.
+             */
+            if (!t->local && t_addr_pair &&
+                t->data_length == sizeof(netsnmp_indexed_addr_pair) &&
+                t_addr_pair->local_addr.sa.sa_family == AF_INET)
+                addr_pair->local_addr = t_addr_pair->local_addr;
             rc = netsnmp_udp_recvfrom(t->sock, buf, size, from, &fromlen,
                                       &addr_pair->local_addr.sa,
                                       &local_addr_len, &(addr_pair->if_index));
